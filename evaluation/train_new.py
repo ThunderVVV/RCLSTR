@@ -18,7 +18,6 @@ from utils import CTCLabelConverter, AttnLabelConverter, Averager, adjust_learni
 from dataset import hierarchical_dataset, AlignCollate, Batch_Balanced_Dataset
 from model import Model
 from test import validation, benchmark_all_eval
-from modules.semi_supervised import PseudoLabelLoss, MeanTeacherLoss
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -26,68 +25,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def train(opt, log):
     """dataset preparation"""
     # train dataset. for convenience
-    if opt.select_data == "label":
-        select_data = [
-            "1.SVT",
-            "2.IIIT",
-            "3.IC13",
-            "4.IC15",
-            "5.COCO",
-            "6.RCTW17",
-            "7.Uber",
-            "8.ArT",
-            "9.LSVT",
-            "10.MLT19",
-            "11.ReCTS",
-        ]
-
-    elif opt.select_data == "synth":
-        # select_data = ["MJ", "ST"]
+    if opt.select_data == "synth":
         select_data = ["synth"]
-    elif opt.select_data == "ST_MJ":
-        select_data = ["MJ", "ST"]
-
-    elif opt.select_data == "synth_SA":
-        select_data = ["MJ", "ST", "SA"]
-        opt.batch_ratio = "0.4-0.4-0.2"  # same ratio with SCATTER paper.
-
-    elif opt.select_data == "mix":
-        select_data = [
-            "1.SVT",
-            "2.IIIT",
-            "3.IC13",
-            "4.IC15",
-            "5.COCO",
-            "6.RCTW17",
-            "7.Uber",
-            "8.ArT",
-            "9.LSVT",
-            "10.MLT19",
-            "11.ReCTS",
-            "MJ",
-            "ST",
-        ]
-
-    elif opt.select_data == "mix_SA":
-        select_data = [
-            "1.SVT",
-            "2.IIIT",
-            "3.IC13",
-            "4.IC15",
-            "5.COCO",
-            "6.RCTW17",
-            "7.Uber",
-            "8.ArT",
-            "9.LSVT",
-            "10.MLT19",
-            "11.ReCTS",
-            "MJ",
-            "ST",
-            "SA",
-        ]
-
-    else:
-        select_data = opt.select_data.split("-")
 
     # set batch_ratio for each data.
     if opt.batch_ratio:
@@ -98,21 +37,6 @@ def train(opt, log):
     train_loader = Batch_Balanced_Dataset(
         opt, opt.train_data, select_data, batch_ratio, log
     )
-
-    if opt.semi != "None":
-        select_data_unlabel = ["U1.Book32", "U2.TextVQA", "U3.STVQA"]
-        batch_ratio_unlabel = [round(1 / len(select_data_unlabel), 3)] * len(
-            select_data_unlabel
-        )
-        dataset_root_unlabel = "data_CVPR2021/training/unlabel/"
-        train_loader_unlabel_semi = Batch_Balanced_Dataset(
-            opt,
-            dataset_root_unlabel,
-            select_data_unlabel,
-            batch_ratio_unlabel,
-            log,
-            learn_type="semi",
-        )
 
     AlignCollate_valid = AlignCollate(opt, mode="test")
     valid_dataset, valid_dataset_log = hierarchical_dataset(
@@ -160,25 +84,22 @@ def train(opt, log):
     model = torch.nn.DataParallel(model).to(device)
     model.train()
     if opt.saved_model != "":
-        fine_tuning_log = f"### loading pretrained model from {opt.saved_model}\n"
+        load_log = f"### loading pretrained model from {opt.saved_model}\n"
 
-        if "MoCo" in opt.saved_model or "MoCo" in opt.self_pre:
-            pretrained_state_dict_qk = torch.load(opt.saved_model)
-            pretrained_state_dict_qk = pretrained_state_dict_qk['state_dict']
-            pretrained_state_dict = {}
-            for name in pretrained_state_dict_qk:
-                print(name)
-                if "encoder_q" in name:
-                    rename = name.replace("encoder_q.", "")
-                    if opt.decoder == "A":
+        pretrained_state_dict_qk = torch.load(opt.saved_model)
+        pretrained_state_dict_qk = pretrained_state_dict_qk['state_dict']
+        pretrained_state_dict = {}
+        for name in pretrained_state_dict_qk:
+            print(name)
+            if "encoder_q" in name:
+                rename = name.replace("encoder_q.", "")
+                if opt.decoder == "A":
+                    pretrained_state_dict[rename] = pretrained_state_dict_qk[name]
+                elif opt.decoder == "BA":
+                    if not "SequenceModeling" in name:
                         pretrained_state_dict[rename] = pretrained_state_dict_qk[name]
-                    elif opt.decoder == "BA":
-                        if not "SequenceModeling" in name:
-                            pretrained_state_dict[rename] = pretrained_state_dict_qk[name]
-                    else:
-                        raise NotImplementedError
-        else:
-            pretrained_state_dict = torch.load(opt.saved_model)
+                else:
+                    raise NotImplementedError
 
         for name, param in model.named_parameters():
             try:
@@ -188,19 +109,15 @@ def train(opt, log):
                     param.data.copy_(
                         pretrained_state_dict[name].data
                     )  # load from pretrained model
-                if opt.FT == "freeze":
-                    param.requires_grad = False  # Freeze
-                    fine_tuning_log += f"pretrained layer (freezed): {name}\n"
-                else:
-                    fine_tuning_log += f"pretrained layer: {name}\n"
+                param.requires_grad = False  # Freeze
+                load_log += f"pretrained layer (freezed): {name}\n"
+                
             except:
-                fine_tuning_log += f"non-pretrained layer: {name}\n"
+                load_log += f"non-pretrained layer: {name}\n"
 
-        print(fine_tuning_log)
-        log.write(fine_tuning_log + "\n")
+        print(load_log)
+        log.write(load_log + "\n")
 
-    # print("Model:")
-    # print(model)
     log.write(repr(model) + "\n")
 
     """ setup loss """
@@ -212,14 +129,8 @@ def train(opt, log):
             device
         )
 
-    if "Pseudo" in opt.semi:
-        criterion_SemiSL = PseudoLabelLoss(opt, converter, criterion)
-    elif "MeanT" in opt.semi:
-        criterion_SemiSL = MeanTeacherLoss(opt, student_for_init_teacher=model)
-
     # loss averager
     train_loss_avg = Averager()
-    semi_loss_avg = Averager()  # semi supervised loss avg
 
     # filter that only require gradient descent
     filtered_parameters = []
@@ -272,7 +183,6 @@ def train(opt, log):
         log.write(repr(scheduler) + "\n")
 
     """ final options """
-    # print(opt)
     opt_log = "------------ Options -------------\n"
     args = vars(opt)
     for k, v in args.items():
@@ -287,12 +197,6 @@ def train(opt, log):
 
     """ start training """
     start_iter = 0
-    # if opt.saved_model != "":
-    #     try:
-    #         start_iter = int(opt.saved_model.split("_")[-1].split(".")[0])
-    #         print(f"continue to train, start_iter: {start_iter}")
-    #     except:
-    #         pass
 
     start_time = time.time()
     best_score = -1
@@ -304,10 +208,7 @@ def train(opt, log):
         position=0,
         leave=True,
     ):
-        if "MeanT" in opt.semi:
-            image_tensors, image_tensors_ema, labels = train_loader.get_batch_ema()
-        else:
-            image_tensors, labels = train_loader.get_batch()
+        image_tensors, labels = train_loader.get_batch()
 
         image = image_tensors.to(device)
         labels_index, labels_length = converter.encode(
@@ -327,37 +228,6 @@ def train(opt, log):
             loss = criterion(
                 preds.view(-1, preds.shape[-1]), target.contiguous().view(-1)
             )
-
-        # semi supervised part (SemiSL)
-        if "Pseudo" in opt.semi:
-            image_unlabel, _ = train_loader_unlabel_semi.get_batch_two_images()
-            image_unlabel = image_unlabel.to(device)
-            loss_SemiSL = criterion_SemiSL(image_unlabel, model)
-
-            loss = loss + loss_SemiSL
-            semi_loss_avg.add(loss_SemiSL)
-
-        elif "MeanT" in opt.semi:
-            (
-                image_tensors_unlabel,
-                image_tensors_unlabel_ema,
-            ) = train_loader_unlabel_semi.get_batch_two_images()
-            image_unlabel = image_tensors_unlabel.to(device)
-            student_input = torch.cat([image, image_unlabel], dim=0)
-
-            image_ema = image_tensors_ema.to(device)
-            image_unlabel_ema = image_tensors_unlabel_ema.to(device)
-            teacher_input = torch.cat([image_ema, image_unlabel_ema], dim=0)
-            loss_SemiSL = criterion_SemiSL(
-                student_input=student_input,
-                student_logit=preds,
-                student=model,
-                teacher_input=teacher_input,
-                iteration=iteration,
-            )
-
-            loss = loss + loss_SemiSL
-            semi_loss_avg.add(loss_SemiSL)
 
         model.zero_grad()
         loss.backward()
@@ -408,7 +278,6 @@ def train(opt, log):
                 lr = optimizer.param_groups[0]["lr"]
                 elapsed_time = time.time() - start_time
                 valid_log = f"\n[{iteration}/{opt.num_iter}] Train_loss: {train_loss_avg.val():0.5f}, Valid_loss: {valid_loss:0.5f}"
-                valid_log += f", Semi_loss: {semi_loss_avg.val():0.5f}\n"
                 valid_log += f'{"Current_score":17s}: {current_score:0.2f}, Current_lr: {lr:0.7f}\n'
                 valid_log += f'{"Best_score":17s}: {best_score:0.2f}, Infer_time: {infer_time:0.1f}, Elapsed_time: {elapsed_time:0.1f}'
 
@@ -432,9 +301,6 @@ def train(opt, log):
                 opt.writer.add_scalar(
                     "train/train_loss", float(f"{train_loss_avg.val():0.5f}"), iteration
                 )
-                opt.writer.add_scalar(
-                    "train/semi_loss", float(f"{semi_loss_avg.val():0.5f}"), iteration
-                )
                 opt.writer.add_scalar("train/lr", float(f"{lr:0.7f}"), iteration)
                 opt.writer.add_scalar(
                     "train/elapsed_time", float(f"{elapsed_time:0.1f}"), iteration
@@ -450,7 +316,6 @@ def train(opt, log):
                 )
 
                 train_loss_avg.reset()
-                semi_loss_avg.reset()
 
     """ Evaluation at the end of training """
     print("Start evaluation on benchmark testset")
@@ -458,7 +323,6 @@ def train(opt, log):
     os.makedirs(f"./result/{opt.exp_name}", exist_ok=True)
     os.makedirs(f"./evaluation_log", exist_ok=True)
     saved_best_model = f"./saved_models/{opt.exp_name}/best_score.pth"
-    # os.system(f'cp {saved_best_model} ./result/{opt.exp_name}/')
     model.load_state_dict(torch.load(f"{saved_best_model}"))
 
     opt.eval_type = "benchmark"
@@ -509,9 +373,6 @@ if __name__ == "__main__":
         "--log_multiple_test", action="store_true", help="log_multiple_test"
     )
     parser.add_argument(
-        "--FT", type=str, default="freeze", help="whether to do fine-tuning |init|freeze|"
-    )
-    parser.add_argument(
         "--grad_clip", type=float, default=5, help="gradient clipping value. default=5"
     )
     """ Optimizer """
@@ -558,7 +419,7 @@ if __name__ == "__main__":
         help="lr_drop_rate. default is the same setting with ASTER",
     )
     """ Model Architecture """
-    parser.add_argument("--model_name", type=str, required=True, help="CRNN|TRBA")
+    parser.add_argument("--model_name", type=str, required=True, help="TRA|TRC")
     parser.add_argument(
         "--num_fiducial",
         type=int,
@@ -622,28 +483,7 @@ if __name__ == "__main__":
         default="None",
         help="whether to use augmentation |None|light|",
     )
-    """ Semi-supervised learning """
-    parser.add_argument(
-        "--semi",
-        type=str,
-        default="None",
-        help="whether to use semi-supervised learning |None|PL|MT|",
-    )
-    parser.add_argument(
-        "--MT_C", type=float, default=1, help="Mean Teacher consistency weight"
-    )
-    parser.add_argument(
-        "--MT_alpha", type=float, default=0.999, help="Mean Teacher EMA decay"
-    )
-    parser.add_argument(
-        "--model_for_PseudoLabel", default="", help="trained model for PseudoLabel"
-    )
-    parser.add_argument(
-        "--self_pre",
-        type=str,
-        default="MoCo",
-        help="whether to use `RotNet` or `MoCo` pretrained model.",
-    )
+    
     """ exp_name and etc """
     parser.add_argument("--exp_name", help="Where to store logs and models")
     parser.add_argument(
@@ -670,74 +510,17 @@ if __name__ == "__main__":
 
     opt = parser.parse_args()
 
-    if opt.model_name == "CRNN":  # CRNN = NVBC
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "VGG"
-        opt.SequenceModeling = "BiLSTM"
-        opt.Prediction = "CTC"
-
-    elif opt.model_name == "TRBA":  # TRBA
-        opt.Transformation = "TPS"
-        opt.FeatureExtraction = "ResNet"
-        opt.SequenceModeling = "BiLSTM"
-        opt.Prediction = "Attn"
-
-    elif opt.model_name == "RBA":  # RBA
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "ResNet"
-        opt.SequenceModeling = "BiLSTM"
-        opt.Prediction = "Attn"
-
-    elif opt.model_name == "RA":  # RA
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "ResNet"
-        opt.SequenceModeling = "None"
-        opt.Prediction = "Attn"
-
-    elif opt.model_name == "TRA":  # TRA
+    if opt.model_name == "TRA":  # TRA
         opt.Transformation = "TPS"
         opt.FeatureExtraction = "ResNet"
         opt.SequenceModeling = "None"
         opt.Prediction = "Attn"
-    
-    elif opt.model_name == "TVA":  # TRA
-        opt.Transformation = "TPS"
-        opt.FeatureExtraction = "ViT"
-        opt.SequenceModeling = "None"
-        opt.Prediction = "Attn"
-    elif opt.model_name == "TVC":  # TRC
-        opt.Transformation = "TPS"
-        opt.FeatureExtraction = "ViT"
-        opt.SequenceModeling = "None"
-        opt.Prediction = "CTC"
     
     elif opt.model_name == "TRC":  # TRC
         opt.Transformation = "TPS"
         opt.FeatureExtraction = "ResNet"
         opt.SequenceModeling = "None"
         opt.Prediction = "CTC"
-
-    elif opt.model_name == "RC":  # RC
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "ResNet"
-        opt.SequenceModeling = "None"
-        opt.Prediction = "CTC"
-    
-    elif opt.model_name == "RBC":  # RA
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "ResNet"
-        opt.SequenceModeling = "BiLSTM"
-        opt.Prediction = "CTC"
-    elif opt.model_name == "ABINet-CTC":
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "ResTransformer"
-        opt.SequenceModeling = "None"
-        opt.Prediction = "CTC"
-    elif opt.model_name == "ABINet-Attention":
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "ResTransformer"
-        opt.SequenceModeling = "None"
-        opt.Prediction = "Attention"
 
     """ Seed and GPU setting """
     os.environ['PYTHONHASHSEED'] = str(opt.manual_seed)

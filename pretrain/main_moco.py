@@ -174,16 +174,10 @@ parser.add_argument('--word_weight', default=1, type=float,
                     help='alpha in consistent loss weight',
                     )
 parser.add_argument(
-        "--mask",
-        type=str,
-        default="",
-        help="the way to do frame masking, |random|block|continuous|block_plus|",
-    )
-parser.add_argument(
         "--multi_level_consistent",
         type=str,
         default="",
-        help="the way to do multi level consistent, |similarity|ot|global2local|",
+        help="the way to do multi level consistent, ||global2local|",
     )
 parser.add_argument('--frame_subword_consistent_weight', default=1, type=float,
                     help='alpha in consistent loss weight',
@@ -446,21 +440,12 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    if args.multi_level_consistent == "similarity":            
-        losses_frame_subword_consistent = AverageMeter('l_fs', ':.4e')
-        losses_frame_word_consistent = AverageMeter('l_fw', ':.4e')
-        losses_subword_word_consistent = AverageMeter('l_sw', ':.4e')
-    elif args.multi_level_consistent == "global2local": 
+    if args.multi_level_consistent == "global2local": 
         losses_frame_subword_consistent = AverageMeter('l_fs', ':.4e')
         losses_subword_word_consistent = AverageMeter('l_sw', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
-    if args.multi_level_consistent == "similarity": 
-        progress = ProgressMeter(
-            len(train_loader),
-            [batch_time, data_time, losses, losses_frame_subword_consistent, losses_frame_word_consistent, losses_subword_word_consistent,top1, top5],
-            prefix="Epoch: [{}]".format(epoch))
-    elif args.multi_level_consistent == "global2local":
+    if args.multi_level_consistent == "global2local":
         progress = ProgressMeter(
             len(train_loader),
             [batch_time, data_time, losses, losses_frame_subword_consistent, losses_subword_word_consistent,top1, top5],
@@ -485,30 +470,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         # compute output
         if args.loss_setting == "consistent":
-            if args.multi_level_consistent == "similarity":
-                frame_output, frame_target, frame_similarity_q, frame_similarity_p, \
-                q_similarity_frame_pooled_in_subword, q_similarity_frame_pooled_in_word, \
-                subword_output, subword_target, subword_similarity_q, subword_similarity_p, \
-                q_similarity_subword, q_similarity_subword_pooled_in_word, \
-                word_output, word_target, word_similarity_q, word_similarity_p, \
-                q_similarity_word = model(im_q=images[0], im_k=images[1])
-                q_similarity_subword_for_frame = q_similarity_subword[:, :q_similarity_frame_pooled_in_subword.size(-1)]
-                q_similarity_word_for_frame = q_similarity_word[:, :q_similarity_frame_pooled_in_word.size(-1)]
-                q_similarity_word_for_subword = q_similarity_word[:, :q_similarity_subword_pooled_in_word.size(-1)]
-                loss_frame_subword_consistent = 0.5 * F.kl_div(q_similarity_frame_pooled_in_subword.log(), q_similarity_subword_for_frame) + \
-                    0.5 * F.kl_div(q_similarity_subword_for_frame.log(), q_similarity_frame_pooled_in_subword)
-                loss_frame_word_consistent = 0.5 * F.kl_div(q_similarity_frame_pooled_in_word.log(), q_similarity_word_for_frame) + \
-                    0.5 * F.kl_div(q_similarity_word_for_frame.log(), q_similarity_frame_pooled_in_word)
-                loss_subword_word_consistent = 0.5 * F.kl_div(q_similarity_subword_pooled_in_word.log(), q_similarity_word_for_subword) + \
-                    0.5 * F.kl_div(q_similarity_word_for_subword.log(), q_similarity_subword_pooled_in_word)
-            elif args.multi_level_consistent == "ot":
-                frame_output, frame_target, frame_similarity_q, frame_similarity_p, \
-                subword_output, subword_target, subword_similarity_q, subword_similarity_p, \
-                word_output, word_target, word_similarity_q, word_similarity_p, \
-                loss_frame_subword_consistent = model(im_q=images[0], im_k=images[1])
-                loss_frame_word_consistent = 0
-                loss_subword_word_consistent = 0
-            elif args.multi_level_consistent == "global2local":
+            if args.multi_level_consistent == "global2local":
                 if args.fw_consist:
                     frame_output, frame_target, frame_similarity_q, frame_similarity_p, \
                     subword_output, subword_target, subword_similarity_q, subword_similarity_p, \
@@ -566,11 +528,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         # measure accuracy and record loss
         acc1, acc5 = accuracy(subword_output, subword_target, topk=(1, 5))
         losses.update(loss.item(), images[0].size(0))
-        if args.multi_level_consistent == "similarity":
-            losses_frame_subword_consistent.update(loss_frame_subword_consistent.item(), images[0].size(0))
-            losses_frame_word_consistent.update(loss_frame_word_consistent.item(), images[0].size(0))
-            losses_subword_word_consistent.update(loss_subword_word_consistent.item(), images[0].size(0))
-        elif args.multi_level_consistent == "global2local":
+        if args.multi_level_consistent == "global2local":
             losses_frame_subword_consistent.update(loss_frame_subword_consistent.item(), images[0].size(0))
             losses_subword_word_consistent.update(loss_subword_word_consistent.item(), images[0].size(0))
         top1.update(acc1[0], images[0].size(0))

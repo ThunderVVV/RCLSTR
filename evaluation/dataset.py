@@ -38,16 +38,9 @@ class Batch_Balanced_Dataset(object):
             f"dataset_root: {dataset_root}\nselect_data: {select_data}\nbatch_ratio: {batch_ratio}\n"
         )
         assert len(select_data) == len(batch_ratio)
-
-        if learn_type == "semi":
-            _AlignCollate = AlignCollate_SemiSL(self.opt)
-            data_type = "unlabel"
-        elif learn_type == "self":
-            _AlignCollate = AlignCollate_SelfSL(self.opt)
-            data_type = "unlabel"
-        else:
-            _AlignCollate = AlignCollate(self.opt)
-            data_type = "label"
+        
+        _AlignCollate = AlignCollate(self.opt)
+        data_type = "label"
 
         self.data_loader_list = []
         self.dataloader_iter_list = []
@@ -384,98 +377,10 @@ class AlignCollate(object):
     def __call__(self, batch):
         images, labels = zip(*batch)
 
-        if "MeanT" in self.opt.semi and self.mode == "train":
-            image_tensors = [self.transform(image) for image in images]
-            image_tensors = torch.cat([t.unsqueeze(0) for t in image_tensors], 0)
+        image_tensors = [self.transform(image) for image in images]
+        image_tensors = torch.cat([t.unsqueeze(0) for t in image_tensors], 0)
 
-            image_tensors_ema = [self.transform(image) for image in images]
-            image_tensors_ema = torch.cat(
-                [t.unsqueeze(0) for t in image_tensors_ema], 0
-            )
-
-            return image_tensors, image_tensors_ema, labels
-
-        else:
-            image_tensors = [self.transform(image) for image in images]
-            image_tensors = torch.cat([t.unsqueeze(0) for t in image_tensors], 0)
-
-            return image_tensors, labels
-
-
-class AlignCollate_SemiSL(object):
-    def __init__(self, opt):
-        self.opt = opt
-        self.transform = Text_augment(opt)
-
-    def __call__(self, batch):
-
-        if "MeanT" in self.opt.semi:
-            student_list = []
-            teacher_list = []
-            for image in batch:
-                student_data = self.transform(image)
-                teacher_data = self.transform(image)
-                student_list.append(student_data)
-                teacher_list.append(teacher_data)
-
-            student_tensors = torch.cat([t.unsqueeze(0) for t in student_list], 0)
-            teacher_tensors = torch.cat([t.unsqueeze(0) for t in teacher_list], 0)
-
-            return student_tensors, teacher_tensors
-
-        else:
-            image_tensors = [self.transform(image) for image in batch]
-            image_tensors = torch.cat([t.unsqueeze(0) for t in image_tensors], 0)
-
-            return image_tensors, image_tensors
-
-
-class AlignCollate_SelfSL(object):
-    def __init__(self, opt):
-        self.opt = opt
-        self.transform = ResizeNormalize((opt.imgW, opt.imgH))
-        if "MoCo" in opt.self:
-            self.MoCo_augment = MoCo_augment(opt)
-
-    def __call__(self, batch):
-
-        if "RotNet" in self.opt.self:
-            rotate_images = []
-            rotate_labels = []
-            for image in batch:
-                image_rotated_0 = image
-                image_rotated_90 = image.transpose(PIL.Image.ROTATE_90)
-                image_rotated_180 = image.transpose(PIL.Image.ROTATE_180)
-                image_rotated_270 = image.transpose(PIL.Image.ROTATE_270)
-                rotate_images.extend(
-                    [
-                        image_rotated_0,
-                        image_rotated_90,
-                        image_rotated_180,
-                        image_rotated_270,
-                    ]
-                )
-                rotate_labels.extend(
-                    [0, 1, 2, 3]
-                )  # corresponds to 0, 90, 180, 270 degrees, respectively.
-
-            image_tensors = [self.transform(image) for image in rotate_images]
-            image_tensors = torch.cat([t.unsqueeze(0) for t in image_tensors], 0)
-
-            return image_tensors, rotate_labels
-
-        elif "MoCo" in self.opt.self:
-            q_list = []
-            k_list = []
-            for image in batch:
-                q, k = self.MoCo_augment(image)
-                q_list.append(q)
-                k_list.append(k)
-
-            q_tensors = torch.cat([t.unsqueeze(0) for t in q_list], 0)
-            k_tensors = torch.cat([t.unsqueeze(0) for t in k_list], 0)
-
-            return q_tensors, k_tensors
+        return image_tensors, labels
 
 
 # from https://github.com/facebookresearch/moco
@@ -553,32 +458,3 @@ class Text_augment(object):
         image.sub_(0.5).div_(0.5)
 
         return image
-
-
-class MoCo_augment(object):
-    """Take two random crops of one image as the query and key."""
-
-    def __init__(self, opt):
-        self.opt = opt
-
-        # MoCo v1's aug: the same as InstDisc https://arxiv.org/abs/1805.01978
-        augmentation = [
-            transforms.RandomResizedCrop(
-                (opt.imgH, opt.imgW), scale=(0.2, 1.0), interpolation=PIL.Image.BICUBIC
-            ),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.ColorJitter(0.4, 0.4, 0.4, 0.4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-        ]
-
-        self.Augment = transforms.Compose(augmentation)
-        print("Use MoCo_augment", augmentation)
-
-    def __call__(self, x):
-        q = self.Augment(x)
-        k = self.Augment(x)
-        q.sub_(0.5).div_(0.5)
-        k.sub_(0.5).div_(0.5)
-
-        return [q, k]

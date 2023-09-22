@@ -382,12 +382,6 @@ if __name__ == "__main__":
         default="None",
         help="whether to use augmentation |None|Blur|Crop|Rot|",
     )
-    parser.add_argument(
-        "--semi",
-        type=str,
-        default="None",
-        help="whether to use semi-supervised learning |None|PL|MT|",
-    )
     """ Model Architecture """
     parser.add_argument("--model_name", type=str, required=True, help="CRNN|TRBA")
     parser.add_argument(
@@ -414,31 +408,7 @@ if __name__ == "__main__":
 
     opt = parser.parse_args()
 
-    if opt.model_name == "CRNN":
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "VGG"
-        opt.SequenceModeling = "BiLSTM"
-        opt.Prediction = "CTC"
-
-    elif opt.model_name == "TRBA":
-        opt.Transformation = "TPS"
-        opt.FeatureExtraction = "ResNet"
-        opt.SequenceModeling = "BiLSTM"
-        opt.Prediction = "Attn"
-
-    elif opt.model_name == "RBA":  # RBA
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "ResNet"
-        opt.SequenceModeling = "BiLSTM"
-        opt.Prediction = "Attn"
-
-    elif opt.model_name == "RA":  # RBA
-        opt.Transformation = "None"
-        opt.FeatureExtraction = "ResNet"
-        opt.SequenceModeling = "None"
-        opt.Prediction = "Attn"
-    
-    elif opt.model_name == "TRA":  # RBA
+    if opt.model_name == "TRA":  # RBA
         opt.Transformation = "TPS"
         opt.FeatureExtraction = "ResNet"
         opt.SequenceModeling = "None"

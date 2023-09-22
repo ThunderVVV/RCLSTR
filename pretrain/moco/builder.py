@@ -6,7 +6,7 @@ from einops import rearrange
 import numpy as np
 import math
 import random
-import ot
+# import ot
 
 
 class MoCo(nn.Module):
@@ -27,7 +27,6 @@ class MoCo(nn.Module):
         self.m = m
         self.T = T
         self.loss_setting = args.loss_setting
-        self.mask = args.mask
         self.multi_level_consistent = args.multi_level_consistent
         self.permutation = args.permutation
         self.permute_probability = args.permute_probability
@@ -62,36 +61,11 @@ class MoCo(nn.Module):
         # create the queue
         select_subword_count = self.subword_count
         select_word_count = self.word_count
-        if self.mask == "block":
-            mask_ratio = 0.4
-            num_masking_frames = math.floor(mask_ratio * self.frame_count)
-            select_frame_count = 26 - num_masking_frames
-        elif self.mask == "block_plus":
-            mask_ratio = 0.4
-            num_masking_frames = math.floor(mask_ratio * self.frame_count)
-            select_frame_count = 26 + 26 - num_masking_frames
-            select_subword_count = 8
-            select_word_count = 2
-        elif self.mask == "continuous":
-            mask_ratio = 0.4
-            num_masking_frames = math.floor(mask_ratio * self.frame_count)
-            select_frame_count = 26 - num_masking_frames
-        elif self.mask == "random":
-            mask_ratio = 0.4
-            num_masking_frames = math.floor(mask_ratio * self.frame_count)
-            select_frame_count = 26 - num_masking_frames
-        else:
-            select_frame_count = 26
+        select_frame_count = 26
         memory_size = args.memory_size
-        if self.mask != "block_plus":
-            self.frame_K = (memory_size // (select_frame_count * args.batch_size)) * (select_frame_count * args.batch_size)
-            self.subword_K = (memory_size // (select_subword_count * args.batch_size)) * (select_subword_count * args.batch_size)
-            self.word_K = (memory_size // (select_word_count * args.batch_size)) * (select_word_count * args.batch_size)
-        else:
-            self.frame_K = (memory_size // (self.frame_count * args.batch_size)) * (self.frame_count * args.batch_size)
-            self.subword_K = (memory_size // (self.subword_count * args.batch_size)) * (self.subword_count * args.batch_size)
-            self.word_K = (memory_size // (self.word_count * args.batch_size)) * (self.word_count * args.batch_size)
-        
+        self.frame_K = (memory_size // (select_frame_count * args.batch_size)) * (select_frame_count * args.batch_size)
+        self.subword_K = (memory_size // (select_subword_count * args.batch_size)) * (select_subword_count * args.batch_size)
+        self.word_K = (memory_size // (select_word_count * args.batch_size)) * (select_word_count * args.batch_size)        
 
         self.register_buffer("frame_queue", torch.randn(dim, self.frame_K))
         self.frame_queue = nn.functional.normalize(self.frame_queue, dim=0)
@@ -216,54 +190,7 @@ class MoCo(nn.Module):
             logits, targets
         """
 
-        # generate random index
-        if self.mask == "block" or self.mask == "block_plus":
-            frame_count = self.frame_count
-            min_num_frames = 4
-            mask_ratio = 0.4
-            num_masking_frames = math.floor(mask_ratio * frame_count)
-            mask = np.zeros(frame_count)
-            mask_count = 0
-            while mask_count < num_masking_frames:
-                max_mask_frames = num_masking_frames - mask_count
-                max_mask_frames = min(max_mask_frames, num_masking_frames)
-                delta = 0
-                while delta == 0:  # if we don't find new available frame to mask, try again  
-                    w = int(round(random.uniform(min_num_frames, max_mask_frames)))
-                    if w < frame_count:
-                        left = random.randint(0, frame_count - w)
-                        num_masked = mask[left: left + w].sum()
-                        if 0 < w - num_masked <= max_mask_frames:
-                            for i in range(left, left + w):
-                                if mask[i] == 0:
-                                    mask[i] = 1
-                                    delta += 1
-                        if delta > 0:
-                            break
-                if delta == 0:
-                    break
-                else:
-                    mask_count += delta
-            frame_select_index = list(np.where(mask==0)[0])
-        elif self.mask == "continuous":
-            frame_count = self.frame_count
-            mask_ratio = 0.4
-            select = np.zeros(frame_count)
-            w = math.ceil((1 - mask_ratio) * frame_count)
-            left = random.randint(0, frame_count - w)
-            for i in range(left, left + w):
-                select[i] = 1
-            frame_select_index = list(np.where(select==1)[0])
-        elif self.mask == "random":
-            frame_count = self.frame_count
-            mask_ratio = 0.4
-            select_count = frame_count - math.floor(mask_ratio * frame_count)
-
-            frame_select_index = np.random.permutation(frame_count)[:select_count]
-            frame_select_index = np.sort(frame_select_index)
-            frame_select_index = frame_select_index.tolist()
-        else:
-            frame_select_index = None
+        frame_select_index = None
         
         if self.permutation:
             permutation_count = self.permutation_block_count * self.permutation_img_count
@@ -301,28 +228,7 @@ class MoCo(nn.Module):
             frame_k = self._batch_unshuffle_ddp(frame_k, idx_unshuffle)
             subword_k = self._batch_unshuffle_ddp(subword_k, idx_unshuffle)
             word_k = self._batch_unshuffle_ddp(word_k, idx_unshuffle)
-        if self.multi_level_consistent == "ot":
-            sinkhorn_reg = 0.1
-
-            M_frame_subword = - torch.einsum('nfc,nsc->nfs', [frame_q, subword_k]).clone().detach().cpu()
-            a_frame = torch.ones(frame_q.size(1)) / frame_q.size(1)
-            b_subword = torch.ones(subword_k.size(1)) / subword_k.size(1)
-            P_frame_subword = []
-            for i in range(M_frame_subword.size(0)):
-                solved_P = ot.sinkhorn(a_frame, b_subword, M_frame_subword[i], sinkhorn_reg)
-                solved_P = torch.from_numpy(solved_P)
-                P_frame_subword.append(solved_P)
-            P_frame_subword = torch.stack(P_frame_subword, dim=0)
-            P_frame_subword = P_frame_subword.to(frame_q.device)
-            loss_fs = - torch.einsum('nfc,nsc->nfs', [frame_q, subword_k]) * P_frame_subword
-            loss_fs = torch.mean(loss_fs)
-
-            return (*self.get_results(frame_q, frame_k, "frame", permutated_restored_frame_q),
-                    *self.get_results(subword_q, subword_k, "subword", permutated_restored_subword_q),
-                    *self.get_results(word_q, word_k, "word", permutated_restored_word_q),
-                    loss_fs
-                )
-        elif self.multi_level_consistent == "global2local":
+        if self.multi_level_consistent == "global2local":
             # frame to subword
             stride = math.floor(self.frame_count / self.subword_count)
             kernel = self.frame_count - (self.subword_count - 1) * stride
@@ -362,40 +268,13 @@ class MoCo(nn.Module):
                 *self.get_results(subword_q, subword_k, "subword", permutated_restored_subword_q, False),
                 *self.get_results(word_q, word_k, "word", permutated_restored_word_q, False),
                 )
-
-    def similarity_pooling(self, similarity, output_count):
-        """
-        Args:
-            similarity(Tensor) : Its shape is (batchsize, sample_count_per_word, queuesize // sample_count_per_word, sample_count_per_word).
-                For frame, it is (batchsize, 26, frame_queue_size // 26, 26)
-            output_count(int) : Output sample count per word.
-        Returns:
-            Tensor: The pooled similarity. Its shape is (batchsize * output_count, pooled_queuesize)
-        """
-        batch_size = similarity.size(0)
-        sample_count_per_word = similarity.size(-1)
-        similarity_pooled_in_queue = nn.functional.adaptive_avg_pool2d(similarity, (None, output_count))
-        similarity_pooled_in_queue = similarity_pooled_in_queue.reshape(batch_size, sample_count_per_word, -1)
-        similarity_pooled = nn.functional.adaptive_avg_pool2d(similarity_pooled_in_queue, (output_count, None))  # -> (b, 4, K)
-        similarity_pooled = similarity_pooled.reshape(-1, similarity_pooled.size(-1))
-        return similarity_pooled
     
     def get_results(self, q, k, queue_name, permutated_restored_q, between_level):
         # compute logits
         # Einstein sum is more intuitive
         # positive logits: Nx1
 
-        if self.mask == "block_plus":
-            if queue_name == "frame":
-                k_for_queue = k[:, :self.frame_count, :]
-            elif queue_name == "subword":
-                k_for_queue = k[:, :self.subword_count, :]
-            elif queue_name == "word":
-                k_for_queue = k[:, :self.word_count, :]
-            else:
-                raise NotImplementedError
-        else:
-            k_for_queue = k
+        k_for_queue = k
         k_for_queue = k_for_queue.reshape(-1, k_for_queue.size(-1))
         k_for_queue = k_for_queue.contiguous()
 
@@ -416,24 +295,13 @@ class MoCo(nn.Module):
         t_sim = 0.04
         if queue_name == "frame":
             l_neg = torch.einsum('nc,ck->nk', [q, self.frame_queue.clone().detach()])
-            
-            if self.multi_level_consistent == "similarity":
-                q_similarity_frame = l_neg.reshape(l_neg.size(0) // self.frame_count, self.frame_count, -1, self.frame_count)
-                q_similarity_frame_pooled_in_subword = self.similarity_pooling(q_similarity_frame, self.subword_count).div(t_sim).softmax(dim=-1)
-                q_similarity_frame_pooled_in_word = self.similarity_pooling(q_similarity_frame, self.word_count).div(t_sim).softmax(dim=-1)
 
         elif queue_name == "subword":
             l_neg = torch.einsum('nc,ck->nk', [q, self.subword_queue.clone().detach()])
 
-            if self.multi_level_consistent == "similarity":
-                q_similarity_subword = l_neg.div(t_sim).softmax(dim=-1)
-
-                q_similarity_subword_for_pooling = l_neg.reshape(l_neg.size(0) // self.subword_count, self.subword_count, -1, self.subword_count)
-                q_similarity_subword_pooled_in_word = self.similarity_pooling(q_similarity_subword_for_pooling, self.word_count).div(t_sim).softmax(dim=-1)
         elif queue_name == "word":
             l_neg = torch.einsum('nc,ck->nk', [q, self.word_queue.clone().detach()])
-            if self.multi_level_consistent == "similarity":
-                q_similarity_word = l_neg.div(t_sim).softmax(dim=-1)
+
         else:
             raise NotImplementedError
 
@@ -466,15 +334,7 @@ class MoCo(nn.Module):
             self._dequeue_and_enqueue(queue_name, k_for_queue)
 
         if self.loss_setting == "consistent":
-            if self.multi_level_consistent == "similarity":
-                if queue_name == "frame":
-                    return logits, labels, similarity_q, similarity_p, q_similarity_frame_pooled_in_subword, q_similarity_frame_pooled_in_word
-                elif queue_name == "subword":
-                    return logits, labels, similarity_q, similarity_p, q_similarity_subword, q_similarity_subword_pooled_in_word
-                elif queue_name == "word":
-                    return logits, labels, similarity_q, similarity_p, q_similarity_word
-                else:
-                    raise NotImplementedError
+
             return logits, labels, similarity_q, similarity_p
 
         return logits, labels

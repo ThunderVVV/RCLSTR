@@ -1,9 +1,11 @@
 **/tensorboard/*
 **/saved_models/*
 **/data_CVPR2021/*
+**/data_CVPR2021
 **/image_release/*
 **/image_test/*
 **/result/*
+**/.vscode/*
 *.mdb
 *.pth
 *.tar

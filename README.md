@@ -36,7 +36,8 @@ pip install torch==1.7.1+cu110 torchvision==0.8.2+cu110 torchaudio==0.7.2 -f htt
 
 **c. Install other packages.**
 ```shell
-pip install lmdb pillow nltk natsort fire tensorboard tqdm imgaug einops POT
+pip install lmdb pillow nltk natsort fire tensorboard tqdm imgaug einops
+pip install numpy==1.22.3
 ```
 
 ### 2. Data Preparation
@@ -74,6 +75,16 @@ data_CVPR2021
         ├── SVT
         └── SVTP
 ```
+
+Link the dataset path as follows:
+
+```
+cd pretrain
+ln -s /path/to/data_CVPR2021 data_CVPR2021
+cd evaluation
+ln -s /path/to/data_CVPR2021 data_CVPR2021
+```
+
 **TPS model weights**
 
 For the TPS model in the paper, we use the synth pretrained TPS model weights with TRBA. Please download the TPS model weights from [baiduyun (password:px16)](https://pan.baidu.com/s/1YHINOUzcoKcnQl9aRaznHg) and put it in pretrain/TPS_model.
@@ -107,7 +118,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python main_moco.py   \
 --useTPS ./TPS_model/TRBA-Baseline-synth.pth \
 --loss_setting consistent \
 --frame_weight 0 \
---frame_alpha 0 
+--frame_alpha 0 \
 --word_weight 0 \
 --word_alpha 0
 ```
@@ -136,7 +147,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python main_moco.py   \
 --loss_setting consistent \
 --permutation \
 --frame_weight 0 \
---frame_alpha 0 
+--frame_alpha 0 \
 --word_weight 0 \
 --word_alpha 0
 ```

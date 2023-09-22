@@ -10,10 +10,7 @@ from modules.feature_extraction import (
     RCNN_FeatureExtractor,
     ResNet_FeatureExtractor,
 )
-from modules.vit_feature_extraction import ViT_FeatureExtractor
 from modules.sequence_modeling import BidirectionalLSTM
-from modules.prediction import Attention
-from modules.satrn import (ShallowCNN, SatrnEncoder)
 
 
 class Model(nn.Module):
@@ -36,11 +33,6 @@ class Model(nn.Module):
                 I_r_size=(opt.imgH, opt.imgW),
                 I_channel_num=opt.input_channel,
             )
-        elif opt.Transformation == "SCNN":
-            self.Transformation = ShallowCNN(
-                input_channels=3,
-                hidden_dim=256
-            )
         else:
             print("No Transformation module specified")
 
@@ -57,23 +49,9 @@ class Model(nn.Module):
             self.FeatureExtraction = ResNet_FeatureExtractor(
                 opt.input_channel, opt.output_channel
             )
-        elif opt.FeatureExtraction == "ViT":
-            self.FeatureExtraction = SatrnEncoder(
-                n_layers=6,
-                n_head=8,
-                d_k=256 // 8,
-                d_v=256 // 8,
-                d_model=256,
-                n_position=100,
-                d_inner=256 * 4,
-                dropout=0.1
-            )
         else:
             raise Exception("No FeatureExtraction module specified")
-        if opt.FeatureExtraction == "ViT":
-            self.FeatureExtraction_output = 256
-        else:
-            self.FeatureExtraction_output = opt.output_channel
+        self.FeatureExtraction_output = opt.output_channel
         self.AdaptiveAvgPool = nn.AdaptiveAvgPool2d(
             (None, 1)
         )  # Transform final (imgH/16-1) -> 1
@@ -94,16 +72,8 @@ class Model(nn.Module):
                 print("No SequenceModeling module specified")
                 self.SequenceModeling_output = self.FeatureExtraction_output
 
-        if not SelfSL_layer:  # for STR.
-            """Prediction"""
-            if opt.Prediction == "CTC":
-                self.Prediction = nn.Linear(self.SequenceModeling_output, opt.num_class)
-            elif opt.Prediction == "Attn":
-                self.Prediction = Attention(
-                    self.SequenceModeling_output, opt.hidden_size, opt.num_class
-                )
-            else:
-                raise Exception("Prediction is neither CTC or Attn")
+        if not SelfSL_layer:
+            raise
 
         else:
             """for self-supervised learning (SelfSL)"""
@@ -180,9 +150,6 @@ class Model(nn.Module):
 
         """ Feature extraction stage """
         visual_feature = self.FeatureExtraction(image)
-        if self.opt.FeatureExtraction == "ViT":
-            assert visual_feature.size(-1) == 25 and visual_feature.size(-2) == 8
-            visual_feature = nn.functional.pad(visual_feature, (0, 1, 0, 0), "replicate")
         visual_feature = visual_feature.permute(
             0, 3, 1, 2
         )  # [b, c, h, w] -> [b, w, c, h]
@@ -222,28 +189,12 @@ class Model(nn.Module):
 
             # frame
             frame_feature = contextual_feature.permute(0, 2, 1)  # [b, w, c]  -> [b, c, w]  
-            if frame_select_index != None:
-                if self.opt.mask == "block_plus":
-                    masked_frame_feature = frame_feature[:, :, frame_select_index]   
-                elif self.opt.mask == "block" or self.opt.mask == "continuous" or self.opt.mask == "random":
-                    frame_feature = frame_feature[:, :, frame_select_index] 
-                else:
-                    raise NotImplementedError
             
             # subword
-            subword_feature = self.AdaptiveAvgPool_subword(frame_feature)  # [b, c, t]      
-            if self.opt.mask == "block_plus":    
-                masked_subword_feature = self.AdaptiveAvgPool_subword(masked_frame_feature)  # [b, c, t]      
+            subword_feature = self.AdaptiveAvgPool_subword(frame_feature)  # [b, c, t]           
 
             # word
             word_feature = self.AdaptiveAvgPool_word(frame_feature)  # [b, c, w] -> [b, c, 1]
-            if self.opt.mask == "block_plus":    
-                masked_word_feature = self.AdaptiveAvgPool_word(masked_frame_feature)  # [b, c, t]   
-
-            if self.opt.mask == "block_plus":
-                frame_feature = torch.cat((frame_feature, masked_frame_feature), -1)
-                subword_feature = torch.cat((subword_feature, masked_subword_feature), -1)
-                word_feature = torch.cat((word_feature, masked_word_feature), -1)
             
             frame_feature = rearrange(frame_feature, 'b c t -> b t c') 
             frame_ssl = self.frame_fc(frame_feature)
