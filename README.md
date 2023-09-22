@@ -44,7 +44,7 @@ pip install numpy==1.22.3
 
 **Download datasets**
 
-Download the datasets from [baiduyun (password:px16)](https://pan.baidu.com/s/1YHINOUzcoKcnQl9aRaznHg)
+We use the ST(SynthText) training datasets from [STR-Fewer-Labels](https://github.com/ku21fan/STR-Fewer-Labels/blob/main/data.md). Download the datasets from [baiduyun (password:px16)](https://pan.baidu.com/s/1YHINOUzcoKcnQl9aRaznHg).
 
 **Data folder structure**
 
@@ -87,7 +87,7 @@ ln -s /path/to/data_CVPR2021 data_CVPR2021
 
 **TPS model weights**
 
-For the TPS model in the paper, we use the synth pretrained TPS model weights with TRBA. Please download the TPS model weights from [baiduyun (password:px16)](https://pan.baidu.com/s/1YHINOUzcoKcnQl9aRaznHg) and put it in pretrain/TPS_model.
+For the TPS module, we use the pretrained TPS model weights from [STR-Fewer-Labels](https://github.com/ku21fan/STR-Fewer-Labels). Please download the TPS model weights from [baiduyun (password:px16)](https://pan.baidu.com/s/1YHINOUzcoKcnQl9aRaznHg) and put it in pretrain/TPS_model.
 
 ### 3. Pretrain and decoder evaluation
 
@@ -229,6 +229,10 @@ CUDA_VISIBLE_DEVICES=0 python train_new.py \
 <div align="center">
   <img src="figs/res.png" width="800"/>
 </div><br/>
+
+## TODO
+
+- [ ] Support ViT 
 
 ## Acknowledgements
 
